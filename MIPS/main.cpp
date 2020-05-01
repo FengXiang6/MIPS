@@ -1,22 +1,3 @@
-//base requirement:
-//	18 MIPS instructions:
-//		add, sub, and, or, addi,
-//		ori, sll, srl, lw, sw,
-//		lui, slt, slti, beq, bne,
-//		j, jal, jr
-//	MIPS -> machine code
-//	machine code -> MIPS
-//strong requirement:
-//	GUI
-//	bgt, bge, blt, ble, move
-//Stronger functions:
-//	Supporting more instructions such as: 
-//		Xor, Nor, Sra, Xori, Lb, Sb, Lh, SW, Jalr
-//	Simulate execution of the MIPS assembly program in step-by-step 
-//		way with a window to show the values of registers.
-//	Simulate execution of the MIPS assembly program from the current MIPS
-//		instruction to the end and with a window to show the values of registers
-//		With reset to initialize the simulation.
 #include <iostream>
 #include <string>
 #include <cstdlib>
@@ -28,6 +9,14 @@
 #include <set>
 using namespace std;
 
+typedef enum {
+	NONE,
+	VERSION,
+	HELP,
+	ASSEMBLE,
+	DISASSEMBLE,
+	COE
+} progMode;
 typedef enum {
 	ERROR,
 	RdRsRt,
@@ -44,6 +33,9 @@ typedef FILE File;
 class Error {
 public:
 	Error(const string& err) :errmsg(err) {}
+	void print() {
+		cout << errmsg << endl;
+	}
 	void print(int lineNumber) {
 		cout << "error at line " << lineNumber 
 			<< " : " << errmsg << endl;
@@ -78,7 +70,7 @@ const set<string> insSet = {
 	"lui",
 	"lw",	"lb",	"lbu",	"lh",
 	"lhu",	"sw",	"sh",	"sb",
-	"jr", "jalr",
+	"jr",
 	"syscall",
 	"beq", "bne",
 	"j", "jal"
@@ -104,7 +96,7 @@ const set<string> insForm_Rt_ImRs = {
 	"lhu",	"sw",	"sh",	"sb"
 };
 const set<string> insForm_Rs = {
-	"jr", "jalr"
+	"jr"
 };
 const set<string> insForm_None = {
 	"syscall"
@@ -157,205 +149,182 @@ map<string, int> funcCode = {
 	//RdRtSa
 	{"sll",0b000000},{"srl",0b000010},{"sra",0b000011},
 	//Rs
-	{"jalr",0x0000f809},{"jr",0b001000},
+	{"jr",0b001000},
 	//none
-	{"syscall", 0x0000000c},
+	{"syscall", 0b001100},
 };
 map<string, int> labelTable = {};
 vector<int> machineCode = {};
 vector<Instruction> mipsCode = {};
+progMode mode = NONE;
+string outFName = "a.out";
+string filePath;
 
-int tokenize(const string& line, string* tokenList);
-insFormType getInsFormType(const string& ins);
-int checkRegisterSyntax(const string& reg); //done
-int checkImmediateSyntax(const string& inm, bool Sa = false);
-void checkIRSyntax(const string& IR, int* reg = nullptr, int* ofs = nullptr);
-void checkLabelSyntax(const string& label, bool operand = true);
-int convert2Inm(const char* number);
-string converInt2Hexstr(int num);
-int Scan1(ifstream& code);
-int Scan2(ifstream& code);
-//inline void filter(const string* tokenList, int& curr, const string& op) {
-//	curr++;
-//	if (tokenList[curr] != op) curr--;
-//}
-inline bool isIns(const string& ins) { return insSet.count(ins); }
-inline void readReg(const string& reg, int& reg_id) { reg_id = regFile[reg]; }
+//check version
+int Version();
+//check help
+int Help();
+//convert .bin to .coe
+int Tocoe();
+/*                       assemble .asm into .bin                         */
+int Assemble();															 //
+//=========================================================================
+//1th scan for building label table and checking syntax					 //
+int Scan1(ifstream& asmCode);											 //
+//2th scan for writing asm into bin										 //
+int Scan2(ifstream& asmCode);											 //
+//tokenize a line(raw) in .asm into several key words					 //
+int tokenize(const string& line, string* tokenList);					 //
+int checkRegisterSyntax(const string& reg);								 //
+//check immediate syntax, including its range, sa for 5bit shamt,		 //
+//bit26 for 26bit address												 //
+int checkImmediateSyntax(const string& inm, 							 //
+	bool Sa = false, 													 //
+	bool bit26 = false);												 //
+//check Immediate(Register) syntax, it can read at the same time		 //
+void checkIRSyntax(const string& IR, 									 //
+	int* reg = nullptr, 												 //
+	int* ofs = nullptr);												 //
+//check syntax of label. permitIm if this position can be replaced with  //
+//an immediate															 //
+int checkLabelSyntax(const string& label,								 //
+	bool bit26 = false,													 //
+	bool permitIm = true,												 //
+	bool operand = true);												 //
+//=========================================================================
+/*                   disassemble .bin into .asm                      */
+int Disassemble();													 //
+//=====================================================================
+//getBitsOf(num, 1, 0) = num[1:0]									 //
+int getBitsOf(const unsigned int& num, int a, int b);				 //
+//disassemble a single binCode into stream asmf						 //
+int Disassemble32bit(ofstream& asmf, unsigned int& binCode);		 //
+//=====================================================================
+/*                     helper functions                       */
+insFormType getInsFormType(const string& ins);				  //
+//convert char buffer to immediate, support decimal			  //
+//and heximal which starts with 0x							  //
+int convert2Inm(const char* number);						  //
+//convert int to its hex code and return string				  //
+string converInt2Hexstr(int num);							  //
+//parse -h/-v... args from command line 					  //
+void ParseArgs(int argc, char** argv);						  //
+//if the string is a symbol of instruction					  //
+inline bool isIns(const string& ins) { 						  //
+	return insSet.count(ins); 								  //
+}															  //
+//return the actual order number of the register			  //
+inline void readReg(const string& reg, int& reg_id) { 		  //
+	reg_id = regFile[reg]; 									  //
+}															  //
+//==============================================================
 
-int main()
-{
-	ifstream code("hw4.asm");
-	//ofstream out("token_res_1.txt");
-	if (!code.is_open()) { 
-		cout << "error: can not open the file!" << endl; 
-		return 0; 
-	}
-	if (!Scan1(code)) return 0;
-	Scan2(code);
-	return 0;
+
+int main(int argc, char** argv) {
+	try { ParseArgs(argc, argv); }
+	catch (Error& e) { e.print(); }
+	if (mode == NONE) return 0;
+	//check version
+	else if (mode == VERSION)return Version();
+	//check help
+	else if (mode == HELP)return Help();
+	//assemble files
+	else if (mode == ASSEMBLE)return Assemble();
+	//disassemble files
+	else if (mode == DISASSEMBLE)return Disassemble();
+	//convert bin to coe
+	else if (mode == COE)return Tocoe();
+	else return 0;
 }
 
 
 
-
-
-int tokenize(const string& line, string* tokenList) {
-	int id = 0;
-	bool comment = false;
-	bool readItem = false;
-	for (int i = 0; i < MaxListLen; i++)tokenList[i].clear();
-	for (int i = 0; i < line.length(); i++) {
-		if (comment) {
-			//tokenList[id].push_back(line[i]);
-			break;
-		}
-		else if (line[i] == ' ' || line[i] == ',') {
-			if (readItem) { id++; readItem = false; }
-		}
-		else if (line[i] == ':') { 
-			if (readItem) { id++; readItem = false; }
-			tokenList[id].push_back(line[i]);
-			id++;
-		}
-		else if (line[i] == '#') { 
-			if (readItem) {  id++; readItem = false; }
-			//tokenList[id].push_back('#'), id++; 
-			comment = true; 
-		}
-		else if (line[i] == '/') {
-			if (readItem) { id++; readItem = false; }
-			if (i + 1 < line.length() && line[i + 1] == '/') {
-				i = i + 1;
-				//tokenList[id].append("//"), id++;
-				comment = true;
+void ParseArgs(int argc, char** argv) {
+	if (argc == 1) {
+		throw Error("syntax error: please input correct arguments. -h or --help for help.");
+	}
+	else {
+		for (size_t i = 1; i < argc; i++) {
+			if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = HELP;
+				return;
+			}
+			else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = VERSION;
+				return;
+			}
+			else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--assemble") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = ASSEMBLE;
+				if (i == argc - 1) {
+					throw Error("syntax error: missing target.");
+				}
+				else {
+					filePath = argv[++i];
+				}
+			}
+			else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--disassemble") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = DISASSEMBLE;
+				if (i == argc - 1) {
+					throw Error("syntax error: missing target.");
+				}
+				else {
+					filePath = argv[++i];
+				}
+			}
+			else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--coe") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = COE;
+				if (i == argc - 1) {
+					throw Error("syntax error: missing target.");
+				}
+				else {
+					filePath = argv[++i];
+				}
+			}
+			//specify the output file
+			else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
+				if (i == argc - 1) {
+					throw Error("syntax error: missing target.");
+				}
+				else {
+					outFName = argv[++i];
+				}
 			}
 			else {
-				tokenList[id].append(","), id++;
+				throw Error("syntax error: please input correct arguments. -h or --help for help.");
 			}
 		}
-		else {
-			readItem = true;
-			tokenList[id].push_back(line[i]);
-		}
-	}
-	return id + (readItem ? 1 : 0);
-}
-insFormType getInsFormType(const string& ins) {
-	if (insForm_RdRsRt.count(ins))return RdRsRt;
-	if (insForm_RdRtSa.count(ins))return RdRtSa;
-	if (insForm_RtRsIm.count(ins))return RtRsIm;
-	if (insForm_RtIm.count(ins))return RtIm;
-	if (insForm_Rt_ImRs.count(ins))return Rt_ImRs;
-	if (insForm_Rs.count(ins))return Rs;
-	if (insForm_None.count(ins)) return None;
-	if (insForm_RsRtTg.count(ins)) return RsRtTg;
-	if (insForm_Tg.count(ins)) return Tg;
-	return ERROR;
-}
-void checkLabelSyntax(const string& label, bool operand) {
-	if (!operand && labelTable.count(label)) {
-		throw Error("can not define a label twice!");
-	}
-	if (isdigit(label[0])) {
-		throw Error("invalid syntax of label name!");
-	}
-	for (int i = 0; i < label.length(); i++) {
-		if (!isalpha(label[i]) && label[i] != '_' && !isdigit(label[i])) {
-			throw Error("invalid syntax of label name!");
-		}
 	}
 }
-int checkRegisterSyntax(const string& reg) {
-	if (regFile.count(reg))return regFile[reg];
-	else throw Error("invalid register!");
-}
-int checkImmediateSyntax(const string& inm, bool Sa) {
-	int ans;
-	try {
-		ans = convert2Inm(inm.c_str());
-		if (Sa && (ans < 0 || ans >= 32)) {
-			throw Error("operand out of range!");
-		}
+
+int Assemble() {
+	//open .asm file
+	ifstream asmCode(filePath);
+	if (!asmCode.is_open()) {
+		cout << "error: can not open the file!" << endl;
+		return 0;
 	}
-	catch (Error& e) {
-		throw e;
-	}
-	return ans;
-}
-void checkIRSyntax(const string& IR, int* reg, int* ofs) {
-	if (IR[IR.length()-1]!=')')throw Error("invalid operand!");
-	int offset, regn;
-	char number[20]; int np = 0;
-	char regstr[20]; int rp = 0;
-	bool readReg = false;
-	int sp = 0;
-	while (sp < IR.length()-1) {
-		if (!readReg&&IR[sp] == '(')readReg = true;
-		else if (!readReg) {
-			number[np++] = IR[sp];
-		}
-		else {
-			regstr[rp++] = IR[sp];
-		}
-		sp++;
-	}
-	number[np] = regstr[rp] = 0;
-	try {
-		regn = checkRegisterSyntax(regstr);
-		offset = convert2Inm(number);
-	}
-	catch (Error& e) {
-		throw e;
-	}
-	if (ofs) *ofs = offset;
-	if (reg) *reg = regn;
-}
-int convert2Inm(const char* number) {
-	int len, radix = 10, np = 0;
-	int ans = 0;
-	int sign = 1;
-	bool start = true;
-	for (len = 0; number[len]; len++);
-	if (len >= 2&&number[0] == '0'&&number[1] == 'x') {
-		radix = 16; np = 2;
-	}
-	if (radix ^ 10 && len > 6) {
-		throw Error("immediate out of range!");
-	}
-	while (np < len) {
-		if (start&&radix == 10 && number[np] == '-')sign = -1;
-		else {
-			if (isdigit(number[np])) {
-				ans = ans * radix + number[np] - '0';
-			}
-			else if (radix ^ 10 && 'A' <= number[np] && number[np] <= 'F') {
-				ans = ans * radix + number[np] - 'A' + 10;
-			}
-			else if (radix ^ 10 && 'a' <= number[np] && number[np] <= 'f') {
-				ans = ans * radix + number[np] - 'a' + 10;
-			}
-			else throw Error("invalid operand of immediate!");
-		}
-		start = false;
-		np++;
-	}
-	ans = ans * sign;
-	if (radix ^ 16 &&(ans < int(0xffff8000) || ans > int(0x00007fff))) {
-		throw Error("immediate out of range!");
-	}
-	if (radix ^ 16 && ans < 0) {
-		ans &= 0x0000ffff;
-	}
-	return ans;
+	if (!Scan1(asmCode)) return 0;
+	Scan2(asmCode);
+	return 0;
 }
 int Scan1(ifstream& code) {
+	//instruction address, or PC value
 	int addr = 0x00000000;
 	int lineNumber = 0;
 	bool syntaxErr = false;
+	//line in .asm file
 	string line;
+	//storing the result of tokenization
 	string tokenList[MaxListLen];
 	insFormType insForm;
+	//len of token list
 	int len;
+	//key information of the instruction
 	Instruction thisLine;
 
 	while (!code.eof()) {
@@ -366,16 +335,17 @@ int Scan1(ifstream& code) {
 		++lineNumber;
 		getline(code, line);
 		len = tokenize(line, tokenList);
-		if (lineNumber == 39) {
-			lineNumber = lineNumber;
-		}
 		while (!thisLineErr) {
+			//alread read all the tokens
 			if (curr >= len)break;
+			//extra token leads to error
 			else if (readInstructDone)thisLineErr = true;
 			else if (isIns(tokenList[curr])) {
 				thisLine.clear();
+				//thisLine.op = the symbol of MIPS instruction, like 'add'
 				thisLine.op.append(tokenList[curr]);
 				thisLine.insForm = insForm = getInsFormType(tokenList[curr++]);
+				//corresponds which line in .asm file
 				thisLine.lineNumber = lineNumber;
 				if (insForm == Rs) {
 					try {
@@ -392,7 +362,7 @@ int Scan1(ifstream& code) {
 				else if (insForm == Tg) {
 					try {
 						if (len - curr != 1) throw Error("wrong operand number!");
-						checkLabelSyntax(tokenList[curr]);
+						thisLine.immediate = checkLabelSyntax(tokenList[curr], true, true, true);
 						thisLine.label = tokenList[curr++];
 						readInstructDone = true;
 						addr += 4;
@@ -462,7 +432,7 @@ int Scan1(ifstream& code) {
 						if (len - curr != 3) throw Error("wrong operand number!");
 						thisLine.rs = checkRegisterSyntax(tokenList[curr++]);
 						thisLine.rt = checkRegisterSyntax(tokenList[curr++]);
-						checkLabelSyntax(tokenList[curr], true);
+						thisLine.immediate = checkLabelSyntax(tokenList[curr]);
 						thisLine.label.append(tokenList[curr++]);
 						readInstructDone = true;
 						addr += 4;
@@ -493,9 +463,11 @@ int Scan1(ifstream& code) {
 				}
 			}
 			else {
+				//build table of label, every label is followed by a ':'
 				if (curr + 1 < len&&tokenList[curr + 1] == ":") {
 					try {
-						checkLabelSyntax(tokenList[curr], false);
+						//all false for definition checking
+						checkLabelSyntax(tokenList[curr], false, false, false);
 						labelTable[tokenList[curr]] = addr;
 					}
 					catch (Error& e) {
@@ -514,29 +486,14 @@ int Scan1(ifstream& code) {
 		syntaxErr = thisLineErr || false;
 	}
 	code.close();
-	if (syntaxErr) return 0;
+	if (syntaxErr) {
+		cout << "scan 1 failed" << endl;
+		return 0;
+	}
 	else return 1;
 }
-string converInt2Hexstr(int num) {
-	string ans = "";
-	int i = 0, tmp = num, hex;
-	do {
-		hex = (tmp & 0xf0000000) >> 28;
-		if (hex >= 10) {
-			ans.push_back('A' - 10 + hex);
-		}
-		else {
-			ans.push_back(hex + '0');
-		}
-		tmp <<= 4;
-	} while (++i < 8);
-	return ans;
-}
 int Scan2(ifstream& code) {
-	ofstream coe("a.coe");
-	coe << "memory_initialization_radix=16;" << endl
-		<< "memory_initialization_vector=" << endl;
-
+	ofstream bin(outFName, ios::binary);
 	int lineNumber = 0;
 	int addr = 0;
 	bool compileErr = false;
@@ -567,7 +524,6 @@ int Scan2(ifstream& code) {
 				binary |= mipsCode[i].immediate;
 				break;
 			case RtIm:
-				//binary = opCode[mipsCode[i].op];
 				binary |= opCode[mipsCode[i].op] << 26;
 				binary |= mipsCode[i].rt << 16;
 				binary |= mipsCode[i].immediate;
@@ -589,14 +545,17 @@ int Scan2(ifstream& code) {
 				binary |= opCode[mipsCode[i].op] << 26;
 				binary |= mipsCode[i].rs << 21;
 				binary |= mipsCode[i].rt << 16;
-				if (!mipsCode[i].label.empty()) {
+				//this mean it is a label instead of a number
+				if (!(mipsCode[i].immediate ^ 0xffffffff)) {
 					if (!labelTable.count(mipsCode[i].label)) {
 						throw Error("undefined label name!");
 					}
 					else {
-						mipsCode[i].immediate = (labelTable[mipsCode[i].label] - (addr + 4)) >> 2;
+						mipsCode[i].immediate = labelTable[mipsCode[i].label];
 					}
 				}
+				mipsCode[i].immediate = (mipsCode[i].immediate - (addr + 4)) >> 2;
+				//re-checking for illegle label jump, 16bit
 				if (mipsCode[i].immediate < int(0xffff8000) || mipsCode[i].immediate > int(0x00007fff)) {
 					throw Error("at most brach in [-32768, 32768] from current instructions!");
 				}
@@ -605,14 +564,16 @@ int Scan2(ifstream& code) {
 				break;
 			case Tg:
 				binary |= opCode[mipsCode[i].op] << 26;
-				if (!mipsCode[i].label.empty()) {
+				if (!(mipsCode[i].immediate ^ 0xffffffff)) {
 					if (!labelTable.count(mipsCode[i].label)) {
 						throw Error("undefined label name!");
 					}
 					else {
-						mipsCode[i].immediate = labelTable[mipsCode[i].label] >> 2;
+						mipsCode[i].immediate = labelTable[mipsCode[i].label];
 					}
 				}
+				mipsCode[i].immediate >>= 2;
+				//re-checking for illegle label jump, 26bit
 				if (mipsCode[i].immediate < int(0xfe000000) || mipsCode[i].immediate > int(0x00dfffff)) {
 					throw Error("illegal address which is out of 26 bits range!");
 				}
@@ -629,15 +590,385 @@ int Scan2(ifstream& code) {
 		addr += 4;
 	}
 	if (compileErr) {
-		coe.close();
-		remove("a.coe");
+		bin.close();
+		remove(outFName.c_str());
 		return 0;
 	}
 	for (int i = 0; i < mipsCode.size(); i++) {
-		coe << converInt2Hexstr(machineCode[i]);
-		if (i == mipsCode.size() - 1)coe << ";";
-		else coe << ", ";
+		bin.write((char*)&machineCode[i], sizeof(int));
 	}
-	coe.close();
+	bin.close();
 	return 1;
+}
+int Version() {
+	cout << "MIPS assembler -- version 0.0.1" << endl;
+	return 0;
+}
+int Help() {
+	cout << "    -h --help          for help" << endl;
+	cout << "    -v --version       check information of version" << endl;
+	cout << "    -a --assemble      assemble files" << endl;
+	cout << "    -d --disassemble   disassemble files" << endl;
+	cout << "    -o --out           specify the name of outfile" << endl;
+	cout << "    -c --coe           convert binary file to coe" << endl;
+	return 0;
+}
+int Tocoe() {
+	int ins;
+	ifstream code(filePath, ios::binary);
+	if (!code.is_open()) {
+		cout << "error: can not open the file!" << endl;
+		return 0;
+	}
+	ofstream coe(outFName, ios::binary);
+	coe << "memory_initialization_radix=16;" << endl
+		<< "memory_initialization_vector=" << endl;
+	code.read((char*)&ins, sizeof(int));
+	if (code) coe << converInt2Hexstr(ins);
+	else {
+		code.close();
+		coe.close();
+		remove(outFName.c_str());
+		return 0;
+	}
+	do {
+		code.read((char*)&ins, sizeof(int));
+		if (!code) {
+			coe << ";";
+			break;
+		}
+		else coe << "," << endl;
+		coe << converInt2Hexstr(ins);
+	} while (true);
+	code.close();
+	coe.close();
+	return 0;
+}
+int Disassemble()
+{
+	//read in binary format
+	ifstream bin(filePath, ios::binary | ios::in);
+	if (!bin.is_open()) {
+		cout << "error: can not open the file!" << endl;
+		return 0;
+	}
+	//do not care sign
+	unsigned int binCode = 0;
+	ofstream asmf(outFName, ios::out);
+	while (bin.read((char*)&binCode, sizeof(unsigned int))) {
+		try {
+			Disassemble32bit(asmf, binCode);
+		}
+		catch (Error& e) {
+			e.print();
+			asmf.close();
+			remove(outFName.c_str());
+			return 1;
+		}
+	}
+	asmf.close();
+	return 0;
+}
+int Disassemble32bit(ofstream & asmf, unsigned int & binCode)
+{
+	static int addr = 0;
+	int opcd, funccd, rs, rt, rd, sa, im;
+	rs = getBitsOf(binCode, 25, 21);
+	if (!getBitsOf(binCode, 31, 26)) {
+		funccd = getBitsOf(binCode, 5, 0);
+		if (funccd == 0b001000) {
+			asmf << "jr $" << rs;
+		}
+		else if (funccd == 0b001100) {
+			asmf << "syscall";
+		}
+		else if (funccd == 0b000010) {
+			rt = getBitsOf(binCode, 20, 16);
+			rd = getBitsOf(binCode, 15, 11);
+			sa = getBitsOf(binCode, 10, 6);
+			asmf << "srl $" << rd << ", $" << rt << ", " << sa;
+		}
+		else if (funccd == 0b000000) {
+			rt = getBitsOf(binCode, 20, 16);
+			rd = getBitsOf(binCode, 15, 11);
+			sa = getBitsOf(binCode, 10, 6);
+			asmf << "sll $" << rd << ", $" << rt << ", " << sa;
+		}
+		else if (funccd == 0b000011) {
+			rt = getBitsOf(binCode, 20, 16);
+			rd = getBitsOf(binCode, 15, 11);
+			sa = getBitsOf(binCode, 10, 6);
+			asmf << "sra $" << rd << ", $" << rt << ", " << sa;
+		}
+		else {
+			rt = getBitsOf(binCode, 20, 16);
+			rd = getBitsOf(binCode, 15, 11);
+			map<string, int>::iterator funccd_map_iter;
+			for (funccd_map_iter = funcCode.begin(); funccd_map_iter != funcCode.end(); funccd_map_iter++) {
+				if (funccd_map_iter->second == funccd) {
+					asmf << funccd_map_iter->first << " ";
+					asmf << "$" << rd << ", $" << rs << ", $" << rt;
+					break;
+				}
+			}
+			if (funccd_map_iter == funcCode.end()) {
+				string msg = "unknow instruction: " + converInt2Hexstr(binCode);
+				cout << "here1" << endl;
+				throw Error(msg);
+			}
+		}
+	}
+	else {
+		opcd = getBitsOf(binCode, 31, 26);
+		map<string, int>::iterator opcd_map_iter;
+		for (opcd_map_iter = opCode.begin(); opcd_map_iter != opCode.end(); opcd_map_iter++) {
+			if (opcd_map_iter->second == opcd) break;
+		}
+		if (opcd_map_iter == opCode.end()) {
+			string msg = "unknow instruction: " + converInt2Hexstr(binCode);
+			throw Error(msg);
+		}
+		string insSym = opcd_map_iter->first;
+		insFormType insType = getInsFormType(insSym);
+		switch (insType) {
+		case RtRsIm:
+			rt = getBitsOf(binCode, 20, 16);
+			im = getBitsOf(binCode, 15, 0);
+			if (im & 0x00008000) im |= 0xffff0000;
+			asmf << insSym << " $" << rt << ", $" << rs << ", " << im;
+			break;
+		case RtIm:
+			rt = getBitsOf(binCode, 20, 16);
+			im = getBitsOf(binCode, 15, 0);
+			if (im & 0x00008000) im |= 0xffff0000;
+			asmf << insSym << " $" << rt << ", " << im;
+			break;
+		case Rt_ImRs:
+			rt = getBitsOf(binCode, 20, 16);
+			im = getBitsOf(binCode, 15, 0);
+			if (im & 0x00008000) im |= 0xffff0000;
+			asmf << insSym << " $" << rt << ", " << im << "($" << rs << ")";
+			break;
+		case Rs:
+			asmf << insSym << " $" << rs;
+			break;
+		case RsRtTg:
+			//(labelTable[mipsCode[i].label] - (addr + 4)) >> 2;
+			rt = getBitsOf(binCode, 20, 16);
+			im = getBitsOf(binCode, 15, 0);
+			if (im & 0x00008000) im |= 0xffff0000;
+			asmf << insSym << " $" << rs << ", $" << rt << ", 0x" << converInt2Hexstr((im << 2) + addr + 4);
+			break;
+		case Tg:
+			im = getBitsOf(binCode, 25, 0);
+			asmf << insSym << " 0x" << converInt2Hexstr(im << 2);
+			break;
+		}
+	}
+	asmf << "\t\t#address=0x" << converInt2Hexstr(addr) << endl;
+	addr += 4;
+}
+int getBitsOf(const unsigned int& num, int a, int b) {
+	if (a < b || a > 31 || b < 0) return 0;
+	int len = a - b, operand = 1;
+	while (len--) {
+		operand <<= 1;
+		operand |= 1;
+	}
+	operand <<= b;
+	return (num & operand) >> b;
+}
+int tokenize(const string& line, string* tokenList) {
+	//filter [,] [space] and [comment]
+	int id = 0;
+	bool comment = false;
+	bool readItem = false;
+	for (int i = 0; i < MaxListLen; i++)tokenList[i].clear();
+	for (int i = 0; i < line.length(); i++) {
+		if (comment) {
+			break;
+		}
+		else if (line[i] == ' ' || line[i] == ',' || line[i] == '\r' || line[i] == '\n' || line[i] == '\t') {
+			if (readItem) { id++; readItem = false; }
+		}
+		else if (line[i] == ':') { 
+			if (readItem) { id++; readItem = false; }
+			tokenList[id].push_back(line[i]);
+			id++;
+		}
+		else if (line[i] == '#') { 
+			if (readItem) {  id++; readItem = false; }
+			comment = true; 
+		}
+		else if (line[i] == '/') {
+			if (readItem) { id++; readItem = false; }
+			if (i + 1 < line.length() && line[i + 1] == '/') {
+				i = i + 1;
+				comment = true;
+			}
+			else {
+				tokenList[id].append(","), id++;
+			}
+		}
+		else {
+			readItem = true;
+			tokenList[id].push_back(line[i]);
+		}
+	}
+	return id + (readItem ? 1 : 0);
+}
+insFormType getInsFormType(const string& ins) {
+	if (insForm_RdRsRt.count(ins))return RdRsRt;
+	if (insForm_RdRtSa.count(ins))return RdRtSa;
+	if (insForm_RtRsIm.count(ins))return RtRsIm;
+	if (insForm_RtIm.count(ins))return RtIm;
+	if (insForm_Rt_ImRs.count(ins))return Rt_ImRs;
+	if (insForm_Rs.count(ins))return Rs;
+	if (insForm_None.count(ins)) return None;
+	if (insForm_RsRtTg.count(ins)) return RsRtTg;
+	if (insForm_Tg.count(ins)) return Tg;
+	return ERROR;
+}
+int checkLabelSyntax(const string& label, bool bit26, bool permitIm, bool operand) {
+	int ans = 0xffffffff;
+	try {
+		if (!operand && labelTable.count(label)) {
+			throw Error("can not define a label twice!");
+		}
+		if (isdigit(label[0])) {
+			throw Error("invalid syntax of label name!");
+		}
+		for (int i = 0; i < label.length(); i++) {
+			if (!isalpha(label[i]) && label[i] != '_' && !isdigit(label[i])) {
+				throw Error("invalid syntax of label name!");
+			}
+		}
+	}
+	catch (Error& e) {
+		if (permitIm) {
+			try {
+				ans = checkImmediateSyntax(label, false, bit26);
+			}
+			catch (Error& ee) {
+				throw ee;
+			}
+		}
+		else throw e;
+	}
+	return ans;
+}
+int checkRegisterSyntax(const string& reg) {
+	if (regFile.count(reg))return regFile[reg];
+	else throw Error("invalid register!");
+}
+int checkImmediateSyntax(const string& inm, bool Sa, bool bit26) {
+	int ans;
+	try {
+		ans = convert2Inm(inm.c_str());
+		if (Sa) {
+			if (ans < 0 || ans >= 32) {
+				throw Error("operand out of range!");
+			}
+		}
+		else {
+			if (!bit26) {
+				if (ans < int(0xffff8000) || ans > int(0x00007fff)) {
+					throw Error("immediate out of 16 bit range!");
+				}
+				if (ans < 0) {
+					ans &= 0x0000ffff;
+				}
+			}
+			else {
+				if (ans < int(0xfe000000) || ans > int(0x01ffffff)) {
+					throw Error("immediate out of 26 bit range!");
+				}
+				if (ans < 0) {
+					ans &= 0x03ffffff;
+				}
+			}
+		}
+	}
+	catch (Error& e) {
+		throw e;
+	}
+	return ans;
+}
+void checkIRSyntax(const string& IR, int* reg, int* ofs) {
+	if (IR[IR.length()-1]!=')')throw Error("invalid operand!");
+	int offset, regn;
+	char number[20]; int np = 0;
+	char regstr[20]; int rp = 0;
+	bool readReg = false;
+	int sp = 0;
+	while (sp < IR.length()-1) {
+		if (!readReg&&IR[sp] == '(')readReg = true;
+		else if (!readReg) {
+			number[np++] = IR[sp];
+		}
+		else {
+			regstr[rp++] = IR[sp];
+		}
+		sp++;
+	}
+	number[np] = regstr[rp] = 0;
+	try {
+		regn = checkRegisterSyntax(regstr);
+		offset = convert2Inm(number);
+	}
+	catch (Error& e) {
+		throw e;
+	}
+	if (ofs) *ofs = offset;
+	if (reg) *reg = regn;
+}
+int convert2Inm(const char* number) {
+	int len, radix = 10, np = 0;
+	int ans = 0;
+	int sign = 1;
+	bool start = true;
+	for (len = 0; number[len]; len++);
+	if (len >= 2&&number[0] == '0'&&number[1] == 'x') {
+		radix = 16; np = 2;
+	}
+	while (np < len) {
+		if (start&&radix == 10 && number[np] == '-')sign = -1;
+		else {
+			if (isdigit(number[np])) {
+				ans = ans * radix + number[np] - '0';
+			}
+			else if (radix ^ 10 && 'A' <= number[np] && number[np] <= 'F') {
+				ans = ans * radix + number[np] - 'A' + 10;
+			}
+			else if (radix ^ 10 && 'a' <= number[np] && number[np] <= 'f') {
+				ans = ans * radix + number[np] - 'a' + 10;
+			}
+			else throw Error("invalid operand of immediate!");
+		}
+		start = false;
+		np++;
+	}
+	ans = ans * sign;
+	if (radix ^ 10 && (ans & 0xffff0000)) {
+		throw Error("out of 16bit immediate range!");
+	}
+	if (radix ^ 10 && (ans&0x00008000)) {
+		ans |= 0xffff0000;
+	}
+	return ans;
+}
+string converInt2Hexstr(int num) {
+	string ans = "";
+	int i = 0, tmp = num, hex;
+	do {
+		hex = (tmp & 0xf0000000) >> 28;
+		if (hex >= 10) {
+			ans.push_back('A' - 10 + hex);
+		}
+		else {
+			ans.push_back(hex + '0');
+		}
+		tmp <<= 4;
+	} while (++i < 8);
+	return ans;
 }
