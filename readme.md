@@ -2,6 +2,12 @@
 
 ## Usage
 
++ convert `.hex` to `.asm`
+
+  ```bash
+  MIPS -x $pathToHex$ [-o $pathToAsm$] #--translate
+  ```
+
 + convert `.asm` to `.bin`
 
   ```bash
@@ -26,6 +32,35 @@
   MIPS -v ##--version
   MIPS -h ##--help
   ```
+
+`NOTICE`:
+
+1. Input files can have arbitrary name, they are not required to be in format of `*.asm` or whatever. But in this document, I will use specific name to represent files of specific format.
+
+2. Check the format of your file content.
+
+   For `.hex`, please align instructions code in 8 hexes line by line as follows:
+
+   ```bash
+   #content of *.hex
+   08000008,
+   00000020,
+   00000020,
+   ......
+   #`,` can be ignored
+   ```
+
+   For `.coe`, please start with the specific header shown below and then layout code line by line in the same format with `.hex`
+
+   ```bash
+   memory_initialization_radix=16;
+   memory_initialization_vector=
+   08000008,
+   .....
+   08000008;
+   ```
+
+3. `a.out` will be the output if you do not specify the name of output by `-o/--out`.
 
 ## support instructions
 

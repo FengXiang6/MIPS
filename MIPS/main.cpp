@@ -15,7 +15,8 @@ typedef enum {
 	HELP,
 	ASSEMBLE,
 	DISASSEMBLE,
-	COE
+	COE,
+	HEX
 } progMode;
 typedef enum {
 	ERROR,
@@ -166,6 +167,8 @@ int Version();
 int Help();
 //convert .bin to .coe
 int Tocoe();
+//convet hexes to asm
+int HexToAsm();
 /*                       assemble .asm into .bin                         */
 int Assemble();															 //
 //=========================================================================
@@ -209,6 +212,8 @@ int convert2Inm(const char* number);						  //
 string converInt2Hexstr(int num);							  //
 //parse -h/-v... args from command line 					  //
 void ParseArgs(int argc, char** argv);						  //
+//return 32bit value of 8 hexes								  //
+unsigned int hexes2ui(const string& s);							  //
 //if the string is a symbol of instruction					  //
 inline bool isIns(const string& ins) { 						  //
 	return insSet.count(ins); 								  //
@@ -216,6 +221,13 @@ inline bool isIns(const string& ins) { 						  //
 //return the actual order number of the register			  //
 inline void readReg(const string& reg, int& reg_id) { 		  //
 	reg_id = regFile[reg]; 									  //
+}															  //
+//return correponding value of the single hex code			  //
+inline unsigned int shex2ui(const char c) {					  //
+	if (c >= '0'&&c <= '9')return c - '0';					  //
+	else if (c >= 'a'&&c <= 'f')return c - 'a' + 10;		  //
+	else if (c >= 'A'&&c <= 'F')return c - 'A' + 10;		  //
+	else throw Error("illegal hex format!");				  //
 }															  //
 //==============================================================
 
@@ -234,6 +246,7 @@ int main(int argc, char** argv) {
 	else if (mode == DISASSEMBLE)return Disassemble();
 	//convert bin to coe
 	else if (mode == COE)return Tocoe();
+	else if (mode == HEX) return HexToAsm();
 	else return 0;
 }
 
@@ -247,19 +260,19 @@ void ParseArgs(int argc, char** argv) {
 		for (size_t i = 1; i < argc; i++) {
 			if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
 				if (mode != NONE) throw Error("syntax: too many arguments.");
-				mode = HELP;
+				mode = VERSION;
 				return;
 			}
 			else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
 				if (mode != NONE) throw Error("syntax: too many arguments.");
-				mode = VERSION;
+				mode = HELP;
 				return;
 			}
 			else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--assemble") == 0) {
 				if (mode != NONE) throw Error("syntax: too many arguments.");
 				mode = ASSEMBLE;
 				if (i == argc - 1) {
-					throw Error("syntax error: missing target.");
+					throw Error("syntax error: missing source.");
 				}
 				else {
 					filePath = argv[++i];
@@ -269,7 +282,7 @@ void ParseArgs(int argc, char** argv) {
 				if (mode != NONE) throw Error("syntax: too many arguments.");
 				mode = DISASSEMBLE;
 				if (i == argc - 1) {
-					throw Error("syntax error: missing target.");
+					throw Error("syntax error: missing source.");
 				}
 				else {
 					filePath = argv[++i];
@@ -279,7 +292,7 @@ void ParseArgs(int argc, char** argv) {
 				if (mode != NONE) throw Error("syntax: too many arguments.");
 				mode = COE;
 				if (i == argc - 1) {
-					throw Error("syntax error: missing target.");
+					throw Error("syntax error: missing source.");
 				}
 				else {
 					filePath = argv[++i];
@@ -294,11 +307,39 @@ void ParseArgs(int argc, char** argv) {
 					outFName = argv[++i];
 				}
 			}
+			else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--hex") == 0) {
+				if (mode != NONE) throw Error("syntax: too many arguments.");
+				mode = HEX;
+				if (i == argc - 1) {
+					throw Error("syntax error: missing source.");
+				}
+				else {
+					filePath = argv[++i];
+				}
+			}
 			else {
 				throw Error("syntax error: please input correct arguments. -h or --help for help.");
 			}
 		}
 	}
+}
+
+unsigned int hexes2ui(const string & s)
+{
+	unsigned int ans = 0;
+	int operand = 28;
+	int i = 0;
+	if (s.length() < 8) throw Error("instruction must be aligned in 8 hexes!");
+	try {
+		while (operand >= 0) {
+			ans |= shex2ui(s[i++]) << operand;
+			operand -= 4;
+		}
+	}
+	catch (Error& e) {
+		throw e;
+	}
+	return ans;
 }
 
 int Assemble() {
@@ -601,16 +642,19 @@ int Scan2(ifstream& code) {
 	return 1;
 }
 int Version() {
-	cout << "MIPS assembler -- version 0.0.1" << endl;
+	//cout << "MIPS assembler -- version 0.0.1" << endl;
+	//add function of converting hexes to asm
+	cout << "MIPS assembler -- version 0.0.2" << endl;
 	return 0;
 }
 int Help() {
-	cout << "    -h --help          for help" << endl;
-	cout << "    -v --version       check information of version" << endl;
-	cout << "    -a --assemble      assemble files" << endl;
-	cout << "    -d --disassemble   disassemble files" << endl;
-	cout << "    -o --out           specify the name of outfile" << endl;
-	cout << "    -c --coe           convert binary file to coe" << endl;
+	cout << "    -h,--help          for help" << endl;
+	cout << "    -v,--version       check information of version" << endl;
+	cout << "    -a,--assemble      assemble files" << endl;
+	cout << "    -d,--disassemble   disassemble files" << endl;
+	cout << "    -o,--out           specify the name of outfile" << endl;
+	cout << "    -c,--coe           convert binary file to coe" << endl;
+	cout << "    -x,--hex           convert hexes segment to asm code" << endl;
 	return 0;
 }
 int Tocoe() {
@@ -642,6 +686,30 @@ int Tocoe() {
 	} while (true);
 	code.close();
 	coe.close();
+	return 0;
+}
+int HexToAsm()
+{
+	ifstream hex(filePath);
+	if (!hex.is_open()) {
+		cout << "error: can not open the file!" << endl;
+		return 0;
+	}
+	ofstream asmf(outFName, ios::out);
+	string line;
+	while (getline(hex, line)) {
+		try {
+			unsigned int binCode = hexes2ui(line);
+			Disassemble32bit(asmf, binCode);
+		}
+		catch (Error& e) {
+			e.print();
+			asmf.close();
+			remove(outFName.c_str());
+			return 1;
+		}
+	}
+	asmf.close();
 	return 0;
 }
 int Disassemble()
