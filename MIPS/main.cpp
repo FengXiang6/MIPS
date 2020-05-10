@@ -129,7 +129,7 @@ map<string, int> regFile = {
 map<string, int> opCode = {
 	//RtRsIm
 	{"addi",0b001000}, {"ori",0b001101},{"addiu",0b001001},
-	{"andi",0b001100},{"xori",0b001110},{"slti",0b001011},
+	{"andi",0b001100},{"xori",0b001110},{"slti",0b001010},
 	{"sltiu",0b001011},
 	//RtIm
 	{"lui",0b001111},
